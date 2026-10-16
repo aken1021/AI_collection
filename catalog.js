@@ -1,0 +1,1 @@
+window.HANDBOOK = {"root":"E:/Igaming/Slot_Client_WildFrontier","schema":"slot-handbook/v1","notes":["此資料庫從空白開始，請逐筆匯入技能、規則與知識。","資料僅保存在目前瀏覽器；請定期匯出 JSON 或 ZIP 備份。"],"items":[],"project":"Slot_Client_WildFrontier","scannedAt":"2026-10-07T00:00:00+08:00"};

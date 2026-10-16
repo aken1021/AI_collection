@@ -1,0 +1,1 @@
+window.HANDBOOK_CLOUD_CONFIG = {"apiKey":"AIzaSyB2cVkc2GgHvGViJR4Bew-QqixENEyvGwc","authDomain":"aidata-f6d2b.firebaseapp.com","projectId":"aidata-f6d2b","appId":"1:434683017313:web:2ab4cf80ec48b626735220","ownerEmail":"kenduan1021@gmail.com"};
