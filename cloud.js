@@ -41,6 +41,7 @@ window.HandbookCloud = (() => {
     return revision
   }
   try {
+    if (location.hostname === '127.0.0.1') { login.hidden = true; message('本機檔案模式：資料儲存在專案的 data/library.json（包含附件、版本與回收桶）。'); return { onUser, message, enabled: false } }
     if (location.protocol === 'file:') { login.hidden = true; message('離線版：資料保存在此瀏覽器。'); return { onUser, message, enabled: false } }
     if (!config || !window.firebase) throw Error('無法載入登入服務；本機資料仍保留。請確認網路後重新整理。')
     firebase.initializeApp(config)

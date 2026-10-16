@@ -19,7 +19,7 @@
   const base = window.HANDBOOK.items
   async function save() {
     const sequence = ++mutationSequence
-    if (state.cloudMeta.ownerEmail || window.HandbookCloud?.user) { state.cloudMeta.ownerEmail ||= window.HandbookCloud.user.email; state.cloudMeta.dirty = true }
+    if (!window.HandbookStorage.fileBacked && (state.cloudMeta.ownerEmail || window.HandbookCloud?.user)) { state.cloudMeta.ownerEmail ||= window.HandbookCloud.user.email; state.cloudMeta.dirty = true }
     if (durableStorage) {
       try {
         await window.HandbookStorage.write(localLibrary())
@@ -36,7 +36,7 @@
         }
         return true
       }
-      catch { toast('儲存失敗，內容仍在頁面；請立即匯出備份。'); return false }
+      catch (error) { toast(`儲存失敗：${error.message} 內容仍在頁面；請立即匯出備份。`); return false }
     }
     try { localStorage.setItem(storageKey, JSON.stringify(state.personal)); localStorage.setItem(favoriteKey, JSON.stringify(state.stars)); return true }
     catch { toast('瀏覽器儲存空間不足或不可用；請匯出 JSON 備份，此次內容僅保留於頁面。'); return false }
@@ -142,7 +142,7 @@
   function render() {
     if (storageLoading) { $('detail').innerHTML = '<p>正在開啟附件與版本資料庫…</p>'; $('results').innerHTML = ''; return }
     const privateWeb = typeof location !== 'undefined' && location.protocol !== 'file:' && !!window.HANDBOOK_CLOUD_CONFIG
-    if ((privateWeb || state.cloudMeta.ownerEmail) && !window.HandbookCloud?.user) {
+    if (!window.HandbookStorage.fileBacked && (privateWeb || state.cloudMeta.ownerEmail) && !window.HandbookCloud?.user) {
       $('detail').innerHTML = '<h2>私人資料庫</h2><p>請按上方「Google 登入」開啟您的技能、規則與知識庫。</p>'; $('results').innerHTML = ''; $('type-nav').innerHTML = ''; $('result-count').textContent = '請先登入您的 Google 帳號。'
       $('import-btn').disabled = true; $('export-btn').disabled = true; $('trash-btn').disabled = true; return
     }
@@ -305,7 +305,7 @@
     return out.join('')
   }
   function renderHelp() {
-    $('detail').innerHTML = `<div class="overview"><span class="tag green">${domains[state.domain]}資料庫</span><h2>逐筆匯入與建立連結</h2><p>目前資料庫沒有預載技能、規則或知識。按「匯入」選擇 Markdown、ZIP、資料夾或工作台 JSON 備份；匯入預覽可勾選與現有資料的相關連結。即使先匯入技能、後匯入知識，也能在第二次匯入時連結兩者。</p><h3>匯出與刪除</h3><p>「匯出技能」只包含目前技能；「匯出相關技能」包含目前技能與整個關聯群組。技能 ZIP 保留匯入時的相對目錄及檔名，只增加一份「匯出說明.md」記錄關聯；重新匯入時可還原連結。刪除相關技能會列出同一關聯群組的個人資料（包含目前技能），確認後一起移至回收桶。</p><h3>附件與版本</h3><p>每筆資料下方可下載原始附件、查看版本並還原。編輯或更新前自動保存最近 20 次快照；刪除後可從上方回收桶還原。ZIP 的匯出說明保存分類、操作指南與版本，全部資料庫備份也包含回收桶。單檔上限 10 MB、單次匯入上限 50 MB。</p><h3>資料保存</h3><p>匯入資料與附件只保存在此瀏覽器，登入 Google 後會同步至私人雲端；未登入或離線時不會跨裝置同步，也不會直接安裝技能或修改遊戲專案。請定期使用上方「匯出資料庫」備份。</p></div>`
+    $('detail').innerHTML = `<div class="overview"><span class="tag green">${domains[state.domain]}資料庫</span><h2>逐筆匯入與建立連結</h2><p>目前資料庫沒有預載技能、規則或知識。按「匯入」選擇 Markdown、ZIP、資料夾或工作台 JSON 備份；匯入預覽可勾選與現有資料的相關連結。即使先匯入技能、後匯入知識，也能在第二次匯入時連結兩者。</p><h3>匯出與刪除</h3><p>「匯出技能」只包含目前技能；「匯出相關技能」包含目前技能與整個關聯群組。技能 ZIP 保留匯入時的相對目錄及檔名，只增加一份「匯出說明.md」記錄關聯；重新匯入時可還原連結。刪除相關技能會列出同一關聯群組的個人資料（包含目前技能），確認後一起移至回收桶。</p><h3>附件與版本</h3><p>每筆資料下方可下載原始附件、查看版本並還原。編輯或更新前自動保存最近 20 次快照；刪除後可從上方回收桶還原。ZIP 的匯出說明保存分類、操作指南與版本，全部資料庫備份也包含回收桶。單檔上限 10 MB、單次匯入上限 50 MB。</p><h3>資料保存</h3><p>使用 start.ps1 啟動本機網站時，匯入內容、附件、版本、收藏與回收桶全部保存在專案 data/library.json，每次寫入前保留上一份 library.previous.json。直接開啟 HTML 或遠端靜態網站仍使用原本瀏覽器儲存；請從舊網站匯出 JSON，再於本機網站匯入以搬移資料。原始瀏覽器資料不會因搬移而刪除。</p></div>`
   }  function renderAudit() {
     const conflicts = base.filter(i => i.conflicts?.length || i.versionsDiffer)
     $('detail').innerHTML = `<h2>先看適用範圍，再使用來源</h2><p class="muted">來源全文忠實保留原文件（敏感值已遮蔽），操作指南與應用指令已標示本專案限制。</p><div class="notice">AGENTS.md 禁止修改共用模組並要求 Cocos MCP 操作資產。舊技能若寫「直接改 scene／prefab／meta」或「共用層加 log」，在本專案不可照做。</div>${conflicts.map(i => `<div class="audit-row"><button data-jump="${escape(i.id)}">${escape(i.title)}</button>${i.versionsDiffer ? '<p>技能副本存在版本差異，可切換來源版本查看。</p>' : ''}${(i.conflicts || []).map(c => `<p>${escape(c)}</p>`).join('')}</div>`).join('')}`
@@ -711,6 +711,7 @@
         else { state.personal.push(item); added++ }
       }
       for (const batch of state.pendingCloud.trash) if (!state.trash.some(old => old.domain === batch.domain && old.at === batch.at)) state.trash.push(batch)
+      state.stars = [...new Set([...state.stars, ...state.pendingCloud.stars])]
     }
     for (const i of state.pending) {
       const n = state.personal.findIndex(p => p.domain === state.domain && p.id === i.id)
@@ -726,6 +727,7 @@
   $('export-btn').onclick = () => { $('export-target').textContent = domains[state.domain]; $('export-count').textContent = `將匯出 ${selectedExport().length} 筆${domains[state.domain]}資料。`; $('exporter').showModal() }
   $('export-scope').onchange = () => $('export-count').textContent = `將匯出 ${selectedExport().length} 筆${domains[state.domain]}資料。`
   $('export-json').onclick = () => exportData(selectedExport(), 'json', $('export-scope').value === 'all')
+  $('export-complete').onclick = () => download(`完整資料庫搬移備份-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(cloudLibrary(), null, 2), 'application/json')
   $('export-zip').onclick = () => exportData(selectedExport(), 'zip', $('export-scope').value === 'all')
   $('trash-btn').onclick = () => {
     const batches = state.trash.filter(batch => batch.domain === state.domain)
@@ -746,7 +748,7 @@
   document.addEventListener('keydown', e => { if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !document.querySelector('dialog[open]')) { e.preventDefault(); $('search').focus() } })
   document.querySelectorAll('dialog').forEach(d => d.addEventListener('click', e => { if (e.target === d) { const r = d.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close() } }))
   render()
-  if (typeof indexedDB !== 'undefined') {
+  if (window.HandbookStorage.fileBacked || typeof indexedDB !== 'undefined') {
     $('import-btn').disabled = true; $('export-btn').disabled = true; $('trash-btn').disabled = true
     window.HandbookReady = (async () => {
       try {
@@ -754,10 +756,10 @@
         if (stored) { state.personal = stored.personal; state.stars = stored.stars || []; state.trash = stored.trash || []; state.cloudMeta = stored.cloudMeta || {} }
         else await window.HandbookStorage.write({ personal: state.personal, stars: state.stars, trash: [] })
         durableStorage = true; storageLoading = false
-        try { localStorage.removeItem(storageKey); localStorage.removeItem(favoriteKey) } catch {}
+        if (!window.HandbookStorage.fileBacked) try { localStorage.removeItem(storageKey); localStorage.removeItem(favoriteKey) } catch {}
         render()
         await connectCloud()
-      } catch { toast('附件資料庫無法開啟；請重新整理或改用一般瀏覽模式。為保護既有資料，目前不允許匯入或編輯。'); $('detail').innerHTML = '<p>資料庫開啟失敗，請重新整理。</p>'; $('results').innerHTML = '' }
+      } catch (error) { toast(`資料庫開啟失敗：${error.message}`); $('detail').innerHTML = `<p>資料庫開啟失敗：${escape(error.message)}</p><p>若要儲存至專案 data 資料夾，請執行 start.ps1，再開啟 http://127.0.0.1:8765。</p>`; $('results').innerHTML = '' }
     })()
   }
   if (storageFailed) toast('無法載入瀏覽器個人資料；可匯入之前的 JSON 備份。')
