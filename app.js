@@ -5,43 +5,39 @@
   const singular = { skill: '技能', rule: '規則', knowledge: '知識庫', pattern: 'Pattern' }
   const types = ['skill', 'rule', 'knowledge', 'pattern']
   const domains = { slot: '老虎機', stocks: '股票分析' }
-  const storageKey = 'wildfrontier-handbook-personal-v2', favoriteKey = 'wildfrontier-handbook-stars-v2'
   const escape = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
   const stripFront = s => s.replace(/^---\r?\n[\s\S]*?\r?\n---\s*/, '')
   const redaction = s => String(s).replace(/^.*\b(?:agentKey|api[_-]?key|access[_-]?token|password|secret[_-]?key)\b.*$/gim, '[敏感設定值已移除，請在本機確認]').replace(/\b(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]+/g, '[憑證已移除]')
   const state = { domain: 'slot', domainViews: {}, type: 'all', category: '', query: '', mode: 'browse', selected: null, tab: 'guide', personal: [], stars: [], pending: [], pendingFiles: [], linkCandidates: [], editing: null, inputs: {} }
-  let storageFailed = false, durableStorage = false, storageLoading = typeof indexedDB !== 'undefined', cloudReady = false, cloudQueue = Promise.resolve(), mutationSequence = 0
+  let storageLoading = true, lastSaved
   state.trash = []
-  state.cloudMeta = {}
-  try { localStorage.removeItem('wildfrontier-handbook-personal-v1'); localStorage.removeItem('wildfrontier-handbook-stars-v1') } catch {}
-  try { state.personal = JSON.parse(localStorage.getItem(storageKey) || '[]'); state.stars = JSON.parse(localStorage.getItem(favoriteKey) || '[]'); if (!Array.isArray(state.personal) || !Array.isArray(state.stars)) throw Error('格式錯誤') } catch { state.personal = []; state.stars = []; storageFailed = true }
-  state.personal = state.personal.map(i => ({ ...i, domain: i.domain === 'stocks' ? 'stocks' : 'slot' }))
+  state.libraryMetadata = {}
   const base = window.HANDBOOK.items
-  async function save() {
-    const sequence = ++mutationSequence
-    if (!window.HandbookStorage.fileBacked && (state.cloudMeta.ownerEmail || window.HandbookCloud?.user)) { state.cloudMeta.ownerEmail ||= window.HandbookCloud.user.email; state.cloudMeta.dirty = true }
-    if (durableStorage) {
-      try {
-        await window.HandbookStorage.write(localLibrary())
-        if (cloudReady && window.HandbookCloud?.user) {
-          const data = cloudLibrary()
-          cloudQueue = cloudQueue.catch(() => {}).then(async () => {
-            window.HandbookCloud.message('正在儲存到私人雲端…')
-            const revision = await window.HandbookCloud.write(data)
-            state.cloudMeta = { ...state.cloudMeta, revision, dirty: mutationSequence !== sequence, syncedAt: new Date().toISOString() }
-            await window.HandbookStorage.write(localLibrary())
-            window.HandbookCloud.message(`私人雲端已同步 · ${window.HandbookCloud.user?.email || ''}`)
-          })
-          try { await cloudQueue } catch (error) { window.HandbookCloud.message(`本機已保存，雲端尚未同步：${error.message}`) }
-        }
-        return true
-      }
-      catch (error) { toast(`儲存失敗：${error.message} 內容仍在頁面；請立即匯出備份。`); return false }
-    }
-    try { localStorage.setItem(storageKey, JSON.stringify(state.personal)); localStorage.setItem(favoriteKey, JSON.stringify(state.stars)); return true }
-    catch { toast('瀏覽器儲存空間不足或不可用；請匯出 JSON 備份，此次內容僅保留於頁面。'); return false }
+  function localLibrary() { return { ...state.libraryMetadata, schema: 'ai-handbook-cloud/v1', personal: state.personal, stars: state.stars, trash: state.trash } }
+  function loadLibrary(value, remember = true) {
+    const { personal, stars, trash, ...metadata } = value
+    state.personal = personal.map(item => ({ ...item, domain: item.domain === 'stocks' ? 'stocks' : 'slot', personal: true }))
+    state.stars = stars || []; state.trash = trash || []; state.libraryMetadata = metadata
+    if (remember) lastSaved = JSON.parse(JSON.stringify(localLibrary()))
   }
-  function localLibrary() { return { personal: state.personal, stars: state.stars, trash: state.trash, cloudMeta: state.cloudMeta } }
+  function requireWritable() {
+    if (window.HandbookStorage.connected) return true
+    toast('請先按「連接 data 資料夾」，選取本專案的 data，才能匯入或編輯。')
+    return false
+  }
+  async function save() {
+    try {
+      const value = JSON.parse(JSON.stringify(localLibrary()))
+      await window.HandbookStorage.write(value)
+      lastSaved = JSON.parse(JSON.stringify(value))
+      window.HandbookCloud.message('已儲存至 data/library.json（包含全文、附件、版本與回收桶）。')
+      return true
+    } catch (error) {
+      if (lastSaved) loadLibrary(lastSaved)
+      toast(`尚未儲存：${error.message}`)
+      return false
+    }
+  }
   function cloudLibrary() { return JSON.parse(JSON.stringify({ schema: 'ai-handbook-cloud/v1', personal: state.personal, stars: state.stars, trash: state.trash })) }
   function validateCloudLibrary(data) {
     if (data.schema !== 'ai-handbook-cloud/v1' || !Array.isArray(data.personal) || !Array.isArray(data.trash || [])) throw Error('雲端資料格式不合法。')
@@ -54,57 +50,6 @@
       }
     } finally { state.domain = domain }
     return { personal, trash, stars: (data.stars || []).filter(value => typeof value === 'string') }
-  }
-  async function connectCloud() {
-    const cloud = window.HandbookCloud
-    if (!cloud?.enabled) return
-    cloud.beforeSignOut = () => state.cloudMeta.dirty ? '尚有未同步的本機變更。請先等待同步完成，或下載完整備份。' : null
-    cloud.onUser(async user => {
-      cloudReady = false
-      try {
-        if (!user) {
-          if (state.cloudMeta.ownerEmail && !state.cloudMeta.dirty) {
-            state.personal = []; state.stars = []; state.trash = []
-            await window.HandbookStorage.write(localLibrary())
-          }
-          render()
-          return
-        }
-        await cloudQueue.catch(() => {})
-        const remote = await cloud.read()
-        if (cloud.user?.uid !== user.uid) return
-        if (state.cloudMeta.dirty) { cloud.message('本機有未同步變更；請先備份，再按「同步雲端」取得最新資料。'); render(); return }
-        const local = cloudLibrary()
-        const firstJoin = !state.cloudMeta.ownerEmail
-        if (remote.data) {
-          const incoming = validateCloudLibrary(remote.data)
-          if (!state.cloudMeta.ownerEmail) {
-            const merged = new Map(incoming.personal.map(item => [`${item.domain}:${item.id}`, item]))
-            for (const item of local.personal) { const key = `${item.domain}:${item.id}`, current = merged.get(key); if (!current || (item.updatedAt || '') > (current.updatedAt || '')) merged.set(key, item) }
-            incoming.personal = [...merged.values()]
-            for (const batch of local.trash) if (!incoming.trash.some(other => other.domain === batch.domain && other.at === batch.at)) incoming.trash.push(batch)
-            incoming.stars = [...new Set([...incoming.stars, ...local.stars])]
-          }
-          Object.assign(state, incoming)
-        }
-        state.cloudMeta = { ownerEmail: user.email, revision: remote.revision, dirty: false, syncedAt: new Date().toISOString() }
-        await window.HandbookStorage.write(localLibrary())
-        cloudReady = true; render()
-        if (!remote.data || (firstJoin && local.personal.length)) await save()
-        else cloud.message(`私人雲端已載入 · ${user.email}`)
-      } catch (error) { cloud.message(`雲端連線失敗，本機資料仍保留：${error.message}`); render() }
-    })
-    $('cloud-sync').onclick = async () => {
-      if (!cloud.user) return
-      try {
-        await cloudQueue.catch(() => {})
-        if (state.cloudMeta.dirty) { download(`尚未同步資料-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(cloudLibrary(), null, 2), 'application/json'); cloud.message('已先下載本機未同步資料的備份。') }
-        const remote = await cloud.read()
-        if (remote.data) Object.assign(state, validateCloudLibrary(remote.data))
-        state.cloudMeta = { ownerEmail: cloud.user.email, revision: remote.revision, dirty: false, syncedAt: new Date().toISOString() }
-        await window.HandbookStorage.write(localLibrary()); cloudReady = true; render(); cloud.message('已取得私人雲端最新資料。')
-      } catch (error) { cloud.message(`同步失敗：${error.message}`) }
-    }
   }
   function snapshot(item, reason) {
     const { history, ...value } = item
@@ -140,13 +85,14 @@
     $('category').value = state.category
   }
   function render() {
-    if (storageLoading) { $('detail').innerHTML = '<p>正在開啟附件與版本資料庫…</p>'; $('results').innerHTML = ''; return }
-    const privateWeb = typeof location !== 'undefined' && location.protocol !== 'file:' && !!window.HANDBOOK_CLOUD_CONFIG
-    if (!window.HandbookStorage.fileBacked && (privateWeb || state.cloudMeta.ownerEmail) && !window.HandbookCloud?.user) {
-      $('detail').innerHTML = '<h2>私人資料庫</h2><p>請按上方「Google 登入」開啟您的技能、規則與知識庫。</p>'; $('results').innerHTML = ''; $('type-nav').innerHTML = ''; $('result-count').textContent = '請先登入您的 Google 帳號。'
-      $('import-btn').disabled = true; $('export-btn').disabled = true; $('trash-btn').disabled = true; return
+    if (storageLoading) {
+      $('detail').innerHTML = `<h2>讀取 data/library.json</h2><p>${escape(state.storageError || '正在讀取資料檔案…')}</p><p>直接開啟 index.html 時，請按上方「連接 data 資料夾」，選取本專案的 data。也可以執行 start.ps1 自動讀寫。</p>`
+      $('results').innerHTML = ''; $('type-nav').innerHTML = ''
+      for (const id of ['import-btn', 'export-btn', 'trash-btn']) $(id).disabled = true
+      return
     }
-    if (!storageLoading) { $('import-btn').disabled = false; $('export-btn').disabled = false; $('trash-btn').disabled = false }
+    $('import-btn').disabled = !window.HandbookStorage.connected
+    $('export-btn').disabled = false; $('trash-btn').disabled = false
     document.querySelectorAll('#domain-nav [data-domain]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.domain === state.domain)))
     $('domain-badge').textContent = domains[state.domain]
     $('page-subtitle').textContent = `${domains[state.domain]}資料庫：搜尋、匯入並連結技能、規則與知識。`
@@ -165,6 +111,7 @@
     return available.filter(i => i.id !== item.id && ((item.relatedIds || []).includes(i.id) || (i.relatedIds || []).includes(item.id)))
   }
   function confirmDelete(items, message) {
+    if (!requireWritable()) return
     if (!items.length) return toast('目前沒有可刪除的個人資料；專案快照無法刪除。')
     $('delete-message').textContent = message
     $('delete-dialog').showModal()
@@ -174,6 +121,7 @@
       state.personal = state.personal.filter(i => i.domain !== state.domain || !ids.has(i.id)).map(i => i.domain === state.domain ? { ...i, relatedIds: (i.relatedIds || []).filter(id => !ids.has(id)) } : i)
       state.stars = state.stars.filter(id => ![...ids].some(removed => id === `${state.domain}:${removed}` || (state.domain === 'slot' && id === removed)))
       const stored = await save()
+      if (!stored) return
       $('delete-dialog').close()
       render()
       if (stored) toast(`已移至回收桶 ${ids.size} 筆資料，可從回收桶還原。`)
@@ -227,7 +175,7 @@
       const previous = versions[Number(button.dataset.versionRestore)].snapshot
       const next = withVersion(current, { ...previous, id: current.id, domain: state.domain, personal: true }, '還原版本前')
       state.personal = state.personal.map(i => i === current ? next : i)
-      const stored = await save(); $('history-dialog').close(); render(); if (stored) toast('已還原；還原前的版本也已保存。')
+      const stored = await save(); if (!stored) return; $('history-dialog').close(); render(); if (stored) toast('已還原；還原前的版本也已保存。')
     } })
     $('history-dialog').showModal()
   }
@@ -305,12 +253,13 @@
     return out.join('')
   }
   function renderHelp() {
-    $('detail').innerHTML = `<div class="overview"><span class="tag green">${domains[state.domain]}資料庫</span><h2>逐筆匯入與建立連結</h2><p>目前資料庫沒有預載技能、規則或知識。按「匯入」選擇 Markdown、ZIP、資料夾或工作台 JSON 備份；匯入預覽可勾選與現有資料的相關連結。即使先匯入技能、後匯入知識，也能在第二次匯入時連結兩者。</p><h3>匯出與刪除</h3><p>「匯出技能」只包含目前技能；「匯出相關技能」包含目前技能與整個關聯群組。技能 ZIP 保留匯入時的相對目錄及檔名，只增加一份「匯出說明.md」記錄關聯；重新匯入時可還原連結。刪除相關技能會列出同一關聯群組的個人資料（包含目前技能），確認後一起移至回收桶。</p><h3>附件與版本</h3><p>每筆資料下方可下載原始附件、查看版本並還原。編輯或更新前自動保存最近 20 次快照；刪除後可從上方回收桶還原。ZIP 的匯出說明保存分類、操作指南與版本，全部資料庫備份也包含回收桶。單檔上限 10 MB、單次匯入上限 50 MB。</p><h3>資料保存</h3><p>使用 start.ps1 啟動本機網站時，匯入內容、附件、版本、收藏與回收桶全部保存在專案 data/library.json，每次寫入前保留上一份 library.previous.json。直接開啟 HTML 或遠端靜態網站仍使用原本瀏覽器儲存；請從舊網站匯出 JSON，再於本機網站匯入以搬移資料。原始瀏覽器資料不會因搬移而刪除。</p></div>`
+    $('detail').innerHTML = `<div class="overview"><span class="tag green">${domains[state.domain]}資料庫</span><h2>逐筆匯入與建立連結</h2><p>網站會從 data/library.json 載入已保存的技能、規則與知識。按「匯入」選擇 Markdown、ZIP、資料夾或工作台 JSON 備份；匯入預覽可勾選與現有資料的相關連結。即使先匯入技能、後匯入知識，也能在第二次匯入時連結兩者。</p><h3>匯出與刪除</h3><p>「匯出技能」只包含目前技能；「匯出相關技能」包含目前技能與整個關聯群組。技能 ZIP 保留匯入時的相對目錄及檔名，只增加一份「匯出說明.md」記錄關聯；重新匯入時可還原連結。刪除相關技能會列出同一關聯群組的個人資料（包含目前技能），確認後一起移至回收桶。</p><h3>附件與版本</h3><p>每筆資料下方可下載原始附件、查看版本並還原。編輯或更新前自動保存最近 20 次快照；刪除後可從上方回收桶還原。ZIP 的匯出說明保存分類、操作指南與版本，全部資料庫備份也包含回收桶。單檔上限 10 MB、單次匯入上限 50 MB。</p><h3>資料保存</h3><p>所有內容、附件、版本、收藏與回收桶都以 data/library.json 為準。直接開啟 index.html 時，按「連接 data 資料夾」授權讀寫；連接後每次匯入、編輯、刪除都直接存回 JSON，並保留 library.previous.json。透過 start.ps1 啟動則自動讀寫。遠端靜態網站會讀取部署的 JSON，需連接本機 data 才能保存修改；要更新遠端內容，請將修改後的 JSON commit 並 push。匯入時會先預覽新增與重複項目，勾選「更新重複資料」可更新既有內容，不勾選則保留既有資料。</p></div>`
   }  function renderAudit() {
     const conflicts = base.filter(i => i.conflicts?.length || i.versionsDiffer)
     $('detail').innerHTML = `<h2>先看適用範圍，再使用來源</h2><p class="muted">來源全文忠實保留原文件（敏感值已遮蔽），操作指南與應用指令已標示本專案限制。</p><div class="notice">AGENTS.md 禁止修改共用模組並要求 Cocos MCP 操作資產。舊技能若寫「直接改 scene／prefab／meta」或「共用層加 log」，在本專案不可照做。</div>${conflicts.map(i => `<div class="audit-row"><button data-jump="${escape(i.id)}">${escape(i.title)}</button>${i.versionsDiffer ? '<p>技能副本存在版本差異，可切換來源版本查看。</p>' : ''}${(i.conflicts || []).map(c => `<p>${escape(c)}</p>`).join('')}</div>`).join('')}`
   }
   function openEditor(item = null) {
+    if (!requireWritable()) return
     state.editing = item?.personal ? item.id : null
     $('editor-title').textContent = item?.personal ? '編輯個人資料' : item ? '複製為個人資料' : '新增資料'
     $('edit-type').value = item?.type || 'skill'; $('edit-name').value = item?.name || ''; $('edit-title').value = item?.title || ''; $('edit-category').value = item?.category || '自訂技能'; $('edit-summary').value = item?.summary || ''; $('edit-content').value = item?.content || ''; $('edit-inputs').value = (item?.fields || []).map(f => `${f[3] ? '*' : ''}${f[1]}`).join('\n'); $('edit-related-notes').value = item?.relatedNotes || ''
@@ -323,7 +272,7 @@
       if (!i.name || !i.title || !i.category || !i.summary || !i.content.trim()) return toast('請填入名稱、標題、分類、說明與內容。')
       if (edited) state.personal = state.personal.map(x => x.domain === state.domain && x.id === i.id ? withVersion(edited, i, '內容編輯前') : x)
       else state.personal.push(i)
-      const stored = await save(); $('editor').close(); state.mode = 'mine'; state.type = 'all'; state.category = ''; state.query = ''; $('search').value = ''; $('conflict-only').checked = false; state.selected = i.id; state.tab = type === 'skill' ? 'guide' : 'content'; render(); if (stored) toast('已儲存至此瀏覽器。')
+      const stored = await save(); if (!stored) return; $('editor').close(); state.mode = 'mine'; state.type = 'all'; state.category = ''; state.query = ''; $('search').value = ''; $('conflict-only').checked = false; state.selected = i.id; state.tab = type === 'skill' ? 'guide' : 'content'; render(); if (stored) toast('已儲存至 data/library.json。')
     }
   }
   function safeName(s) { return s.replace(/[^\p{L}\p{N}_.-]/gu, '-').replace(/-+/g, '-').slice(-120) || 'document' }
@@ -498,7 +447,7 @@
       }
       total += attachments.reduce((n, x) => n + x.content.length, 0) + sourceVariants.reduce((n, x) => n + x.content.length, 0)
       if (total > 40 * 1024 * 1024) throw Error('備份附件超過 40 MB，請拆分匯入。')
-      return { id: id.slice(0, 500), domain: state.domain, type: i.type, name: i.name.slice(0, 160), title: i.title.slice(0, 240), category: typeof i.category === 'string' ? i.category.slice(0, 100) : `匯入${singular[i.type]}`, summary: typeof i.summary === 'string' ? i.summary.slice(0, 2000) : '', relatedNotes: typeof i.relatedNotes === 'string' ? i.relatedNotes.slice(0, 4000) : '', content, sources: a(i.sources, 20), fields, steps: a(i.steps), outputs: a(i.outputs), checks: a(i.checks), conflicts: a(i.conflicts), related: a(i.related), relatedIds: a(i.relatedIds, 100).map(x => x.startsWith('personal:') || x.startsWith('import:') ? x : `import:${x}`), action: typeof i.action === 'string' ? i.action.slice(0, 2000) : '', blocked: !!i.blocked, pattern: i.type === 'pattern' && i.pattern && typeof i.pattern === 'object' ? JSON.parse(redaction(JSON.stringify(i.pattern))) : undefined, attachments, sourceVariants, rawFile, fileOnly: !!rawFile, history, updatedAt: typeof i.updatedAt === 'string' ? i.updatedAt : undefined, versionsDiffer: !!i.versionsDiffer, personal: true, origin: '備份匯入' }
+      return { id: id.slice(0, 500), mergedIds: a(i.mergedIds, 100), domain: state.domain, type: i.type, name: i.name.slice(0, 160), title: i.title.slice(0, 240), category: typeof i.category === 'string' ? i.category.slice(0, 100) : `匯入${singular[i.type]}`, summary: typeof i.summary === 'string' ? i.summary.slice(0, 2000) : '', relatedNotes: typeof i.relatedNotes === 'string' ? i.relatedNotes.slice(0, 4000) : '', content, sources: a(i.sources, 20), fields, steps: a(i.steps), outputs: a(i.outputs), checks: a(i.checks), conflicts: a(i.conflicts), related: a(i.related), relatedIds: a(i.relatedIds, 100).map(x => x.startsWith('personal:') || x.startsWith('import:') ? x : `import:${x}`), action: typeof i.action === 'string' ? i.action.slice(0, 2000) : '', blocked: !!i.blocked, pattern: i.type === 'pattern' && i.pattern && typeof i.pattern === 'object' ? JSON.parse(redaction(JSON.stringify(i.pattern))) : undefined, attachments, sourceVariants, rawFile, fileOnly: !!rawFile, history, updatedAt: typeof i.updatedAt === 'string' ? i.updatedAt : undefined, versionsDiffer: !!i.versionsDiffer, personal: true, origin: '備份匯入' }
     })
   }
   function validateTrash(value) {
@@ -531,18 +480,10 @@
     }
   }
   function importKey(item) {
-    const source = item.sources?.[0]?.replaceAll('\\', '/') || ''
-    const name = item.type === 'skill' ? item.name : source && !source.startsWith('個人資料/') ? source.split('/').pop() : item.name
-    return `${item.type}:${name.normalize('NFC').trim().toLowerCase()}`
+    return window.HandbookMerge.itemKey(item)
   }
   function normalizeImportRows(rows, existing = allItems()) {
-    const known = new Map(existing.map(item => [importKey(item), item])), chosen = new Map(), aliases = new Map()
-    for (const row of rows) {
-      const key = importKey(row), previous = chosen.get(key) || known.get(key), id = previous?.id || row.id
-      aliases.set(row.id, id)
-      chosen.set(key, { ...row, id, relatedIds: [...new Set([...(previous?.relatedIds || []), ...(row.relatedIds || [])])] })
-    }
-    return [...chosen.values()].map(row => ({ ...row, relatedIds: [...new Set(row.relatedIds.map(id => aliases.get(id) || id))].filter(id => id !== row.id) }))
+    return window.HandbookMerge.normalizeImportRows(rows, existing)
   }
   const importDefaults = { preview: $('import-preview').innerHTML, typeHelp: $('import-type-help').textContent, replaceHelp: $('replace-import-help').textContent }
   function resetImport() {
@@ -585,10 +526,11 @@
       try { data = JSON.parse(f.content.replace(/^\uFEFF/, '')) } catch { continue }
       if (data?.schema === 'ai-handbook-cloud/v1') {
         try {
-          state.pendingCloud = validateCloudLibrary(data); state.pending = []
-          $('import-preview').innerHTML = `<strong>私人雲端資料備份</strong><p>將合併還原兩個主分頁：${['slot', 'stocks'].map(name => `${domains[name]} ${state.pendingCloud.personal.filter(item => item.domain === name).length} 筆`).join('、')}；包含附件、版本及回收桶。</p>`
+          state.pendingCloud = validateCloudLibrary(data); state.pendingCloud.personal = normalizeImportRows(state.pendingCloud.personal, state.personal); state.pending = []
+          const collisions = state.pendingCloud.personal.filter(item => state.personal.some(current => current.domain === item.domain && current.id === item.id)).length
+          $('import-preview').innerHTML = `<strong>完整資料庫備份</strong><p>將合併還原兩個主分頁：${['slot', 'stocks'].map(name => `${domains[name]} ${state.pendingCloud.personal.filter(item => item.domain === name).length} 筆`).join('、')}；包含附件、版本及回收桶。</p><p>${state.pendingCloud.personal.length - collisions} 筆新增 · ${collisions} 筆重複；勾選「更新重複資料」可更新，取消勾選則保留既有內容。</p>`
           $('confirm-import').disabled = false; $('import-type').disabled = true; $('replace-import').disabled = false
-        } catch (e) { state.pendingCloud = null; $('confirm-import').disabled = true; $('import-preview').textContent = `雲端備份不合法：${e.message}` }
+        } catch (e) { state.pendingCloud = null; $('confirm-import').disabled = true; $('import-preview').textContent = `完整備份不合法：${e.message}` }
         return
       }
       if (data?.schema === 'slot-handbook/v1') {
@@ -654,7 +596,7 @@
     $('import-type').disabled = !hasGeneralFiles
     $('import-type-help').textContent = hasGeneralFiles ? '只套用到缺少明確分類依據的文件；已辨識的文件會顯示分類原因。切換後可在下方預覽確認分類。' : '目前文件已自動分類，或分類由備份決定，因此不需要選擇一般文件類型。'
     $('replace-import').disabled = !collisions
-    $('replace-import-help').textContent = collisions ? `有 ${collisions} 筆與目前分頁的既有資料重複。預設更新內容、原始匯出路徑與附件，並保留既有關聯；不勾選則跳過。技能依技能名稱與類型，其餘依檔名與類型判斷，不比較目錄。` : '目前沒有重複資料。技能依技能名稱與類型，其餘依檔名與類型判斷，不比較目錄；同批重複文件以最後讀取的內容為準。'
+    $('replace-import-help').textContent = collisions ? `有 ${collisions} 筆與目前分頁的既有資料重複。預設更新內容、原始匯出路徑與附件，並保留既有關聯；不勾選則跳過。技能依名稱判斷；文件依完整相對路徑判斷，忽略工具外層目錄，不合併不同技能中的同名文件。` : '目前沒有重複資料。技能依名稱判斷；文件依完整相對路徑判斷，忽略工具外層目錄，不合併不同技能中的同名文件；同批重複文件以最後讀取的內容為準。'
     const skipped = state.pendingFiles.filter(f => /\.json$/i.test(f.name)).length - (backupFound ? 1 : 0)
     $('import-preview').innerHTML = `<strong>${state.pending.length} 筆可匯入 · ${collisions} 筆重複資料</strong>${backupFound ? '<p class="muted">偵測到完整備份，優先使用備份；包內 Markdown 不重複匯入。</p>' : skipped > 0 ? `<p class="muted">${skipped} 個一般 JSON 會當作附件保存；工作台備份則用於還原結構資料。</p>` : ''}${errors.map(e => `<p class="danger">${escape(e)}</p>`).join('')}${state.pending.map((i, n) => {
       const choices = state.linkCandidates.map((other, k) => ({ other, k })).filter(({ other }) => other.id !== i.id && ['skill', 'knowledge', 'rule'].includes(other.type))
@@ -697,17 +639,18 @@
   $('conflict-only').onchange = render
   $('guide-btn').onclick = () => { state.mode = 'guide'; render() }
   $('edit-type').onchange = e => { if (!$('edit-name').value) $('edit-category').value = `自訂${singular[e.target.value]}` }
-  $('import-btn').onclick = () => { resetImport(); $('import-target').textContent = domains[state.domain]; $('importer').showModal() }
+  $('import-btn').onclick = () => { if (!requireWritable()) return; resetImport(); $('import-target').textContent = domains[state.domain]; $('importer').showModal() }
   $('import-files').onchange = e => prepareImport([...e.target.files])
   $('import-folder').onchange = e => prepareImport([...e.target.files])
   $('import-type').onchange = () => { if (state.pendingFiles.length) refreshImport() }
   $('confirm-import').onclick = async () => {
+    if (!requireWritable()) return
     let added = 0, updated = 0, skipped = 0
     if (state.pendingCloud) {
       for (const item of state.pendingCloud.personal) {
         const n = state.personal.findIndex(current => current.domain === item.domain && current.id === item.id)
-        if (n >= 0 && !$('replace-import').checked) { skipped++; continue }
-        if (n >= 0) { state.personal[n] = withVersion(state.personal[n], item, '雲端備份還原前'); updated++ }
+        if (n >= 0 && !$('replace-import').checked) { state.personal[n].mergedIds = [...new Set([...(state.personal[n].mergedIds || []), ...(item.mergedIds || [])])]; skipped++; continue }
+        if (n >= 0) { state.personal[n] = withVersion(state.personal[n], item, '完整備份還原前'); updated++ }
         else { state.personal.push(item); added++ }
       }
       for (const batch of state.pendingCloud.trash) if (!state.trash.some(old => old.domain === batch.domain && old.at === batch.at)) state.trash.push(batch)
@@ -715,10 +658,11 @@
     }
     for (const i of state.pending) {
       const n = state.personal.findIndex(p => p.domain === state.domain && p.id === i.id)
-      if (n >= 0 && !$('replace-import').checked) { skipped++; continue }
+      if (n >= 0 && !$('replace-import').checked) { state.personal[n].mergedIds = [...new Set([...(state.personal[n].mergedIds || []), ...(i.mergedIds || [])])]; skipped++; continue }
       if (n >= 0) { state.personal[n] = withVersion(state.personal[n], i, '匯入更新前'); updated++ } else { state.personal.push(i); added++ }
     }
     for (const batch of state.pendingTrash || []) if (!state.trash.some(old => old.domain === state.domain && old.at === batch.at)) state.trash.push(batch)
+    loadLibrary(window.HandbookMerge.mergeLibraries(localLibrary()).library, false)
     const stored = await save()
     if (!stored) return
     const selected = state.pending[0]?.id
@@ -727,7 +671,7 @@
   $('export-btn').onclick = () => { $('export-target').textContent = domains[state.domain]; $('export-count').textContent = `將匯出 ${selectedExport().length} 筆${domains[state.domain]}資料。`; $('exporter').showModal() }
   $('export-scope').onchange = () => $('export-count').textContent = `將匯出 ${selectedExport().length} 筆${domains[state.domain]}資料。`
   $('export-json').onclick = () => exportData(selectedExport(), 'json', $('export-scope').value === 'all')
-  $('export-complete').onclick = () => download(`完整資料庫搬移備份-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(cloudLibrary(), null, 2), 'application/json')
+  $('export-complete').onclick = () => download(`完整資料庫備份-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(cloudLibrary(), null, 2), 'application/json')
   $('export-zip').onclick = () => exportData(selectedExport(), 'zip', $('export-scope').value === 'all')
   $('trash-btn').onclick = () => {
     const batches = state.trash.filter(batch => batch.domain === state.domain)
@@ -741,28 +685,40 @@
         const item = state.personal.find(i => i.domain === state.domain && i.id === link.id)
         if (item) item.relatedIds = [...new Set([...(item.relatedIds || []), ...link.relatedIds.filter(id => restoredIds.has(id))])]
       }
-      const stored = await save(); $('trash-dialog').close(); render(); if (stored) toast('已還原刪除的資料與關聯。')
+      const stored = await save(); if (!stored) return; $('trash-dialog').close(); render(); if (stored) toast('已還原刪除的資料與關聯。')
     } })
     $('trash-dialog').showModal()
   }
   document.addEventListener('keydown', e => { if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !document.querySelector('dialog[open]')) { e.preventDefault(); $('search').focus() } })
   document.querySelectorAll('dialog').forEach(d => d.addEventListener('click', e => { if (e.target === d) { const r = d.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close() } }))
-  render()
-  if (window.HandbookStorage.fileBacked || typeof indexedDB !== 'undefined') {
-    $('import-btn').disabled = true; $('export-btn').disabled = true; $('trash-btn').disabled = true
-    window.HandbookReady = (async () => {
-      try {
-        const stored = await window.HandbookStorage.read()
-        if (stored) { state.personal = stored.personal; state.stars = stored.stars || []; state.trash = stored.trash || []; state.cloudMeta = stored.cloudMeta || {} }
-        else await window.HandbookStorage.write({ personal: state.personal, stars: state.stars, trash: [] })
-        durableStorage = true; storageLoading = false
-        if (!window.HandbookStorage.fileBacked) try { localStorage.removeItem(storageKey); localStorage.removeItem(favoriteKey) } catch {}
-        render()
-        await connectCloud()
-      } catch (error) { toast(`資料庫開啟失敗：${error.message}`); $('detail').innerHTML = `<p>資料庫開啟失敗：${escape(error.message)}</p><p>若要儲存至專案 data 資料夾，請執行 start.ps1，再開啟 http://127.0.0.1:8765。</p>`; $('results').innerHTML = '' }
-    })()
+  function storageStatus() {
+    $('storage-connect').hidden = window.HandbookStorage.serverMode
+    window.HandbookCloud.message(window.HandbookStorage.connected ? '資料來源：data/library.json。匯入、編輯與刪除直接寫回檔案，並保留上一份備份。' : '已從 data/library.json 載入。要匯入或編輯，請先連接本專案的 data 資料夾。')
   }
-  if (storageFailed) toast('無法載入瀏覽器個人資料；可匯入之前的 JSON 備份。')
+  $('storage-connect').hidden = window.HandbookStorage.serverMode
+  $('storage-connect').onclick = async () => {
+    try {
+      const value = await window.HandbookStorage.connect()
+      loadLibrary(value); storageLoading = false; state.storageError = ''
+      storageStatus(); render(); toast(`已從 data/library.json 載入 ${state.personal.length} 筆資料。`)
+    } catch (error) {
+      if (error.name === 'AbortError') return
+      if (storageLoading) { state.storageError = error.message; render() }
+      toast(error.message)
+    }
+  }
+  render()
+  window.HandbookReady = (async () => {
+    try {
+      const stored = await window.HandbookStorage.read()
+      if (stored) loadLibrary(stored)
+      else { loadLibrary({ schema: 'ai-handbook-cloud/v1', personal: [], stars: [], trash: [] }); await window.HandbookStorage.write(localLibrary()) }
+      storageLoading = false; storageStatus(); render()
+    } catch (error) {
+      state.storageError = error.message; render()
+      window.HandbookCloud.message(error.message)
+    }
+  })()
   // Pure helpers exposed for meaningful data/round-trip verification.
   window.HandbookCheck = { validateItems, classifyImport, importItem, linkImported, importKey, normalizeImportRows, withVersion, exportWithRelated, originalZipFiles, relationManifest, markdown, backup, filtered, allItems, selectedExport }
 })()

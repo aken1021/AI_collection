@@ -62,15 +62,15 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.allowed():
             return self.reply(403, {'error': 'Only the local app can access this server'})
         path = unquote(urlsplit(self.path).path)
-        if path == '/api/library':
+        if path in ('/api/library', '/data/library.json'):
             try:
                 with self.server.lock:
                     value, revision = self.current()
                 return self.reply(200, value, revision)
             except (ValueError, OSError) as error:
                 return self.reply(500, {'error': str(error)})
-        # Only public app assets are served, never libraries, backups or dotfiles.
-        if path not in ('/', '/index.html', '/app.js', '/archive.js', '/catalog.js', '/cloud.js', '/cloud-format.js', '/firebase-config.js', '/storage.js', '/style.css', '/favicon.svg'):
+        # The primary JSON is handled above; backups and dotfiles stay private.
+        if path not in ('/', '/index.html', '/app.js', '/archive.js', '/catalog.js', '/cloud.js', '/cloud-format.js', '/firebase-config.js', '/storage.js', '/library-merge.js', '/style.css', '/favicon.svg'):
             return self.reply(404, {'error': 'Not found'})
         super().do_GET()
 

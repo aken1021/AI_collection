@@ -49,9 +49,21 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(self.request(Origin='https://example.com')[0], 403)
         self.assertEqual(self.request(Host='evil.example')[0], 403)
         self.assertEqual(self.request('POST', value={'personal': []}, revision='missing')[0], 400)
-        for path in ('/data/library.json', '/.git/config', '/%2e%2e/server.py'):
+        for path in ('/data/library.previous.json', '/.git/config', '/%2e%2e/server.py'):
             self.assertEqual(self.request(path=path)[0], 404)
         self.assertFalse(self.server.library.exists())
+
+    def test_index_source_is_the_same_json_file(self):
+        library = {'schema': 'ai-handbook-cloud/v1', 'personal': [{'content': '全文'}], 'stars': [], 'trash': []}
+        self.assertEqual(self.request('POST', value=library, revision='missing')[0], 200)
+        self.assertEqual(json.loads(self.request(path='/data/library.json')[2]), library)
+
+    def test_shared_merge_module_is_served(self):
+        module = Path(self.folder.name) / 'library-merge.js'
+        module.write_text('// merge module', encoding='utf-8')
+        status, _, body = self.request(path='/library-merge.js')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b'// merge module')
 
     def test_corrupt_existing_file_is_never_overwritten(self):
         self.server.library.parent.mkdir()
