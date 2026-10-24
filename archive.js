@@ -5,6 +5,14 @@ window.HandbookArchive = (() => {
   function toBase64(bytes) { let s = ''; for (let n = 0; n < bytes.length; n += 8192) s += String.fromCharCode(...bytes.subarray(n, n + 8192)); return btoa(s) }
   function fromBase64(s) { return Uint8Array.from(atob(s), c => c.charCodeAt(0)) }
   function fileBytes(file) { return file.encoding === 'base64' ? fromBase64(file.content) : encoder.encode(file.content) }
+  function textContent(file) {
+    if (!file || typeof file.content !== 'string') return null
+    if (file.encoding !== 'base64') return file.content
+    try {
+      const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(fileBytes(file))
+      return /[\x00-\x08\x0b\x0e-\x1f]/.test(text) ? null : text
+    } catch { return null }
+  }
   function readFile(name, data) {
     if (/\.(md|mdc|txt|json|py|cjs|mjs|js|ts|prefab)$/i.test(name)) {
       try { return { name, content: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(data) } } catch {}
@@ -90,5 +98,5 @@ window.HandbookArchive = (() => {
     }
     return files
   }
-  return { zip, unzip, crc32, toBase64, fromBase64, fileBytes, readFile }
+  return { zip, unzip, crc32, toBase64, fromBase64, fileBytes, readFile, textContent }
 })()

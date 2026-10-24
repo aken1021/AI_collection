@@ -214,7 +214,17 @@
     const variants = i.sourceVariants || []
     $('detail-body').innerHTML = `${variants.length ? `<label class="field">來源版本<select id="source-version">${variants.map((v, n) => `<option value="${n}">${escape(v.path)}${n === 0 ? ' · 說明基準' : ''}</option>`).join('')}</select></label>` : ''}<div class="detail-actions"><button id="toggle-raw">查看 Markdown 原文</button></div><div id="document-render" class="markdown"></div>${i.pattern ? `<h3>Pattern metadata</h3><pre class="prompt">${escape(JSON.stringify(i.pattern, null, 2))}</pre>` : ''}${relatedSection(i)}${sources(i)}`
     let raw = false
-    const update = () => { const text = variants[$('source-version')?.value || 0]?.content || i.content; $('document-render').innerHTML = raw ? `<pre id="raw-text">${escape(text)}</pre>` : markdown(text); $('toggle-raw').textContent = raw ? '閱讀文件' : '查看 Markdown 原文' }
+    const update = () => {
+      const original = window.HandbookArchive.textContent(i.rawFile)
+      const text = i.fileOnly && original !== null ? original : (variants[$('source-version')?.value || 0]?.content || i.content)
+      const plain = i.fileOnly && original !== null && !/\.(md|mdc)$/i.test(i.rawFile.name)
+      $('document-render').innerHTML = raw || plain ? `<pre id="raw-text">${escape(text)}</pre>` : markdown(text)
+      $('document-render').innerHTML += (i.attachments || []).map(file => {
+        const content = window.HandbookArchive.textContent(file)
+        return content === null ? '' : `<details class="attachment-content"><summary>閱讀附件：${escape(file.name)}</summary><pre>${escape(content)}</pre></details>`
+      }).join('')
+      $('toggle-raw').textContent = raw ? '閱讀文件' : '查看文件原文'
+    }
     $('toggle-raw').onclick = () => { raw = !raw; update() }
     if ($('source-version')) $('source-version').onchange = update
     update()
@@ -577,7 +587,10 @@
         if (owner) {
           const folder = owner.sources[0].slice(0, Math.max(0, owner.sources[0].lastIndexOf('/') + 1))
           owner.attachments = [...(owner.attachments || []), { ...file, name: file.name.slice(folder.length) }]
-        } else rows.push({ ...importItem({ name: file.name, content: `# ${file.name.split('/').pop()}\n\n原始附件，請下載查看。` }, 'knowledge'), fileOnly: true, rawFile: file })
+        } else {
+          const content = window.HandbookArchive.textContent(file)
+          rows.push({ ...importItem({ name: file.name, content: content === null ? `# ${file.name.split('/').pop()}\n\n原始附件已完整保存，可下載查看。` : content }, 'knowledge'), fileOnly: true, rawFile: file })
+        }
         owned.add(file.name)
       }
     }
